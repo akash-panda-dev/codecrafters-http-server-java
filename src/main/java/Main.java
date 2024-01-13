@@ -7,7 +7,47 @@ import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
 
+enum ResponseCode {
+    OK(200, "OK"),
+    NOT_FOUND(404, "Not Found");
+
+    int code;
+    String message;
+    static final String CRLF = "\r\n";
+
+    ResponseCode(int code, String message) {
+      this.code = code;
+      this.message = message;
+    }
+
+    String getResponseLine() {
+      return "HTTP/1.1 " + code + " " + message + CRLF;
+    }
+  }
+
+
+class HttpRequest {
+    String method;
+    String path;
+    String version;
+
+    private HttpRequest(String method, String path, String version) {
+      this.method = method;
+      this.path = path;
+      this.version = version;
+    }
+
+    public static HttpRequest parseHttpRequest(String requestFirstLine) {
+      String[] parts = requestFirstLine.split(" ");
+      if (parts.length != 3) {
+        return null;
+      }
+      return new HttpRequest(parts[0], parts[1], parts[2]);
+    }
+  }
+
 public class Main {
+
   public static void main(String[] args) {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     System.out.println("Logs from your program will appear here!");
@@ -25,7 +65,22 @@ public class Main {
         OutputStream outputStream = clientSocket.getOutputStream();
         PrintWriter writer = new PrintWriter(outputStream, true);
 
-        writer.println("HTTP/1.1 200 OK\r\n\r\n");
+
+        while (true) {
+          String line = reader.readLine();
+          if (line == null || line.isEmpty()) {
+            break;
+          }
+          HttpRequest request = HttpRequest.parseHttpRequest(line);
+
+          if (request.path.equals("/")) {
+            writer.println(ResponseCode.OK.getResponseLine());
+          } else {
+            writer.println(ResponseCode.NOT_FOUND.getResponseLine());
+          }
+
+          break;
+        }
 
       }
     } catch (IOException e) {
