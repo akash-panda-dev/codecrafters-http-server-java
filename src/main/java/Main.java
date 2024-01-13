@@ -20,8 +20,9 @@ enum ResponseCode {
     this.message = message;
   }
 
-  String getResponseLine() {
-    return "HTTP/1.1 " + code + " " + message + CRLF;
+  @Override
+  public String toString() {
+    return code + " " + message + CRLF;
   }
 }
 
@@ -39,19 +40,39 @@ class HttpRequest {
   String method;
   String path;
   String version;
+  String userAgent;
+  String host;
 
-  private HttpRequest(String method, String path, String version) {
+  private HttpRequest(String method, String path, String version, String userAgent, String host) {
     this.method = method;
     this.path = path;
     this.version = version;
+    this.userAgent = userAgent;
+    this.host = host;
   }
 
-  public static HttpRequest parseHttpRequest(String requestFirstLine) {
-    String[] parts = requestFirstLine.split(" ");
+  public static HttpRequest parseHttpRequest(BufferedReader reader) throws IOException {
+    String requestLine = reader.readLine();
+    String[] parts = requestLine.split(" ");
     if (parts.length != 3) {
       return null;
     }
-    return new HttpRequest(parts[0], parts[1], parts[2]);
+    String method = parts[0];
+    String path = parts[1];
+    String version = parts[2];
+    String userAgent = "";
+    String host = "";
+
+    String headerLine;
+    while ((headerLine = reader.readLine()) != null && !headerLine.isEmpty()) {
+      if (headerLine.toLowerCase().startsWith("user-agent:")) {
+        userAgent = headerLine.substring("User-Agent:".length()).trim();
+      } else if (headerLine.toLowerCase().startsWith("host:")) {
+        host = headerLine.substring("Host:".length()).trim();
+      }
+    }
+
+    return new HttpRequest(method, path, version, userAgent, host);
   }
 }
 
@@ -59,6 +80,7 @@ class HttpResponse {
   ResponseCode responseCode;
   ContentType contentType;
   int contentLength;
+  String version;
   String body;
 
   private HttpResponse(ResponseCode responseCode, ContentType contentType, String body) {
@@ -66,6 +88,7 @@ class HttpResponse {
     this.contentType = contentType;
     this.body = body;
     this.contentLength = body.length();
+    this.version = "HTTP/1.1";
   }
 
   public static HttpResponse createOkResponse(ContentType contentType, String body) {
@@ -77,7 +100,7 @@ class HttpResponse {
   }
 
   public String getResponseString() {
-    String headers = responseCode.getResponseLine() +
+    String headers = version + " " + responseCode.toString() +
         "Content-Type: " + contentType.type + ResponseCode.CRLF +
         "Content-Length: " + contentLength + ResponseCode.CRLF +
         ResponseCode.CRLF;
@@ -88,19 +111,13 @@ class HttpResponse {
 public class Main {
 
   public static void main(String[] args) {
-    // You can use print statements as follows for debugging, they'll be visible
-    // when running tests.
     System.out.println("Logs from your program will appear here!");
 
-    // Using try-with-resources to ensure both ServerSocket and Socket are closed
-    // automatically
     try (ServerSocket serverSocket = new ServerSocket(4221)) {
       serverSocket.setReuseAddress(true);
-      // Accept a connection and also declare the clientSocket in the
-      // try-with-resources
+
       try (Socket clientSocket = serverSocket.accept()) {
         System.out.println("Accepted new connection");
-        // Handle the clientSocket here
 
         InputStream inputStream = clientSocket.getInputStream();
         BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
@@ -108,24 +125,27 @@ public class Main {
         PrintWriter writer = new PrintWriter(outputStream, true);
 
         while (true) {
-          String line = reader.readLine();
-          HttpRequest request = HttpRequest.parseHttpRequest(line);
+          HttpRequest request = HttpRequest.parseHttpRequest(reader);
+          HttpResponse response;
 
           if (request != null && request.path != null) {
             if (request.path.equals("/")) {
-              HttpResponse response = HttpResponse.createOkResponse(ContentType.TXT, "Hello World!");
+              response = HttpResponse.createOkResponse(ContentType.TXT, "Hello World!");
               writer.println(response.getResponseString());
             } else if (request.path.split("/")[1].equals("echo")) {
               String message = request.path.substring(request.path.indexOf("/echo/") + 6);
-              HttpResponse response = HttpResponse.createOkResponse(ContentType.TXT, message);
+              response = HttpResponse.createOkResponse(ContentType.TXT, message);
+              writer.println(response.getResponseString());
+            } else if (request.path.split("/")[1].equals("user-agent")) {
+              response = HttpResponse.createOkResponse(ContentType.TXT, request.userAgent);
               writer.println(response.getResponseString());
             } else {
-              HttpResponse response = HttpResponse.createNotFoundResponse(ContentType.TXT, "Invalid Request");
+              response = HttpResponse.createNotFoundResponse(ContentType.TXT, "Invalid Request");
               writer.println(response.getResponseString());
             }
           } else {
             // Handle the invalid request or send an error response
-            HttpResponse response = HttpResponse.createNotFoundResponse(ContentType.TXT, "Invalid Request");
+            response = HttpResponse.createNotFoundResponse(ContentType.TXT, "Invalid Request");
             writer.println(response.getResponseString());
           }
 
