@@ -6,6 +6,8 @@ import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 enum ResponseCode {
   OK(200, "OK"),
@@ -116,41 +118,45 @@ public class Main {
     try (ServerSocket serverSocket = new ServerSocket(4221)) {
       serverSocket.setReuseAddress(true);
 
-      try (Socket clientSocket = serverSocket.accept()) {
-        System.out.println("Accepted new connection");
+      ExecutorService executorService = Executors.newCachedThreadPool();
 
-        InputStream inputStream = clientSocket.getInputStream();
-        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
-        OutputStream outputStream = clientSocket.getOutputStream();
-        PrintWriter writer = new PrintWriter(outputStream, true);
+      while (true) {
+        executorService.submit(() -> {
+          try (Socket clientSocket = serverSocket.accept()) {
+            System.out.println("Accepted new connection");
 
-        while (true) {
-          HttpRequest request = HttpRequest.parseHttpRequest(reader);
-          HttpResponse response;
+            InputStream inputStream = clientSocket.getInputStream();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+            OutputStream outputStream = clientSocket.getOutputStream();
+            PrintWriter writer = new PrintWriter(outputStream, true);
 
-          if (request != null && request.path != null) {
-            if (request.path.equals("/")) {
-              response = HttpResponse.createOkResponse(ContentType.TXT, "Hello World!");
-              writer.println(response.getResponseString());
-            } else if (request.path.split("/")[1].equals("echo")) {
-              String message = request.path.substring(request.path.indexOf("/echo/") + 6);
-              response = HttpResponse.createOkResponse(ContentType.TXT, message);
-              writer.println(response.getResponseString());
-            } else if (request.path.split("/")[1].equals("user-agent")) {
-              response = HttpResponse.createOkResponse(ContentType.TXT, request.userAgent);
-              writer.println(response.getResponseString());
+            HttpRequest request = HttpRequest.parseHttpRequest(reader);
+            HttpResponse response;
+
+            if (request != null && request.path != null) {
+              if (request.path.equals("/")) {
+                response = HttpResponse.createOkResponse(ContentType.TXT, "Hello World!");
+                writer.println(response.getResponseString());
+              } else if (request.path.split("/")[1].equals("echo")) {
+                String message = request.path.substring(request.path.indexOf("/echo/") + 6);
+                response = HttpResponse.createOkResponse(ContentType.TXT, message);
+                writer.println(response.getResponseString());
+              } else if (request.path.split("/")[1].equals("user-agent")) {
+                response = HttpResponse.createOkResponse(ContentType.TXT, request.userAgent);
+                writer.println(response.getResponseString());
+              } else {
+                response = HttpResponse.createNotFoundResponse(ContentType.TXT, "Invalid Request");
+                writer.println(response.getResponseString());
+              }
             } else {
+              // Handle the invalid request or send an error response
               response = HttpResponse.createNotFoundResponse(ContentType.TXT, "Invalid Request");
               writer.println(response.getResponseString());
             }
-          } else {
-            // Handle the invalid request or send an error response
-            response = HttpResponse.createNotFoundResponse(ContentType.TXT, "Invalid Request");
-            writer.println(response.getResponseString());
+          } catch (IOException e) {
+            System.out.println("IOException: " + e.getMessage());
           }
-
-          break;
-        }
+        });
 
       }
     } catch (IOException e) {
