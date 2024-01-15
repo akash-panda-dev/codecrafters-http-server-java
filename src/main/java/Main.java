@@ -171,7 +171,7 @@ public class Main {
           System.out.println("File to use: " + requestFilename);
           System.out.println("Method: " + request.method);
           if (request.method.equals("POST")) {
-            System.out.println("POST request");
+            System.out.println("POST requests");
             try (BufferedWriter fileWriter = new BufferedWriter(new FileWriter(directory + "/" + requestFilename))) {
               fileWriter.write(request.body);
               response = HttpResponse.createCreatedResponse(ContentType.TXT, "File Created");
