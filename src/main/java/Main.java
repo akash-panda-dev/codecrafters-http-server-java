@@ -6,8 +6,14 @@ import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
 
 enum ResponseCode {
   OK(200, "OK"),
@@ -29,7 +35,8 @@ enum ResponseCode {
 }
 
 enum ContentType {
-  TXT("text/plain");
+  TXT("text/plain"),
+  OCTET("application/octet-stream");
 
   String type;
 
@@ -112,8 +119,103 @@ class HttpResponse {
 
 public class Main {
 
+  private static void handleRequest(Socket socket, Set<String> filesInDir, String directory) throws RuntimeException {
+    try {
+      System.out.println("Accepted new connection from " + socket.getRemoteSocketAddress());
+
+      InputStream inputStream = socket.getInputStream();
+      System.out.println("Got input stream");
+      BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+      OutputStream outputStream = socket.getOutputStream();
+      PrintWriter writer = new PrintWriter(outputStream, true);
+
+      HttpRequest request = HttpRequest.parseHttpRequest(reader);
+      System.out.println("New connecttion " + request);
+      HttpResponse response;
+
+      if (request != null && request.path != null) {
+        if (request.path.equals("/")) {
+          response = HttpResponse.createOkResponse(ContentType.TXT, "Hello World!");
+          writer.println(response.getResponseString());
+        } else if (request.path.split("/")[1].equals("echo")) {
+          String message = request.path.substring(request.path.indexOf("/echo/") + 6);
+          response = HttpResponse.createOkResponse(ContentType.TXT, message);
+          writer.println(response.getResponseString());
+        } else if (request.path.split("/")[1].equals("user-agent")) {
+          response = HttpResponse.createOkResponse(ContentType.TXT, request.userAgent);
+          writer.println(response.getResponseString());
+        } else if (request.path.startsWith("/files/")) {
+          System.out.println("Processing files request");
+          String fileToFind = request.path.substring(request.path.lastIndexOf("/") + 1);
+          System.out.println("File to find: " + fileToFind);
+          if (filesInDir.contains(fileToFind)) {
+            String fileContent = Files.readString(Path.of(directory + "/" + fileToFind));
+
+            response = HttpResponse.createOkResponse(ContentType.OCTET, fileContent);
+            writer.println(response.getResponseString());
+          } else {
+            response = HttpResponse.createNotFoundResponse(ContentType.OCTET, "File Not Found");
+            writer.println(response.getResponseString());
+          }
+        } else {
+          response = HttpResponse.createNotFoundResponse(ContentType.TXT, "Invalid Request");
+          writer.println(response.getResponseString());
+        }
+      } else {
+        // Handle the invalid request or send an error response
+        response = HttpResponse.createNotFoundResponse(ContentType.TXT, "Invalid Request");
+        writer.println(response.getResponseString());
+      }
+    } catch (IOException e) {
+      System.out.println("IOException while handling: " + e.getMessage());
+      e.printStackTrace();
+      throw new RuntimeException(e);
+    } finally {
+      try {
+        socket.close();
+      } catch (IOException e) {
+        System.out.println("IOException while closing socket: " + e.getMessage());
+        e.printStackTrace();
+      }
+    }
+  }
+
+  private static Set<String> getFilesInDir(String dirPath) throws IOException {
+    try {
+      return Files.list(Paths.get(dirPath))
+          .map(Path::toString)
+          .map(path -> path.substring(path.lastIndexOf("/") + 1))
+          .collect(Collectors.toSet());
+    } catch (IOException e) {
+      System.out.println("IOException: " + e.getMessage());
+      throw e;
+    }
+  }
+
   public static void main(String[] args) {
     System.out.println("Logs from your program will appear here!");
+
+    String dirPath = null;
+
+    for (int i = 0; i < args.length; i++) {
+      if (args[i].equals("--directory") && i + 1 < args.length) {
+        dirPath = args[i + 1];
+        break;
+      }
+    }
+
+    final String directory = dirPath;
+    final Set<String> files = new HashSet<>();
+
+    if (dirPath != null) {
+      try {
+        files.addAll(getFilesInDir(directory));
+      } catch (IOException e) {
+        System.out.println("IOException when trying to get files in directory: " + e.getMessage());
+      }
+
+      System.out.println("Files in directory: " + files);
+    }
 
     try (ServerSocket serverSocket = new ServerSocket(4221)) {
       serverSocket.setReuseAddress(true);
@@ -121,47 +223,17 @@ public class Main {
       ExecutorService executorService = Executors.newCachedThreadPool();
 
       while (true) {
-        executorService.submit(() -> {
-          try (Socket clientSocket = serverSocket.accept()) {
-            System.out.println("Accepted new connection");
-
-            InputStream inputStream = clientSocket.getInputStream();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
-            OutputStream outputStream = clientSocket.getOutputStream();
-            PrintWriter writer = new PrintWriter(outputStream, true);
-
-            HttpRequest request = HttpRequest.parseHttpRequest(reader);
-            HttpResponse response;
-
-            if (request != null && request.path != null) {
-              if (request.path.equals("/")) {
-                response = HttpResponse.createOkResponse(ContentType.TXT, "Hello World!");
-                writer.println(response.getResponseString());
-              } else if (request.path.split("/")[1].equals("echo")) {
-                String message = request.path.substring(request.path.indexOf("/echo/") + 6);
-                response = HttpResponse.createOkResponse(ContentType.TXT, message);
-                writer.println(response.getResponseString());
-              } else if (request.path.split("/")[1].equals("user-agent")) {
-                response = HttpResponse.createOkResponse(ContentType.TXT, request.userAgent);
-                writer.println(response.getResponseString());
-              } else {
-                response = HttpResponse.createNotFoundResponse(ContentType.TXT, "Invalid Request");
-                writer.println(response.getResponseString());
-              }
-            } else {
-              // Handle the invalid request or send an error response
-              response = HttpResponse.createNotFoundResponse(ContentType.TXT, "Invalid Request");
-              writer.println(response.getResponseString());
-            }
-          } catch (IOException e) {
-            System.out.println("IOException: " + e.getMessage());
-          }
-        });
-
+        try {
+          Socket clientSocket = serverSocket.accept();
+          executorService.submit(() -> handleRequest(clientSocket, files, directory));
+        } catch (IOException e) {
+          System.out.println("IOException: " + e.getMessage());
+          throw e;
+        }
       }
     } catch (IOException e) {
       System.out.println("IOException: " + e.getMessage());
+      System.exit(1);
     }
-
   }
 }
