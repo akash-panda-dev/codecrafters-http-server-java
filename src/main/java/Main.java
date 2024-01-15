@@ -1,4 +1,6 @@
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -17,7 +19,8 @@ import java.util.stream.Collectors;
 
 enum ResponseCode {
   OK(200, "OK"),
-  NOT_FOUND(404, "Not Found");
+  NOT_FOUND(404, "Not Found"),
+  CREATED(201, "Created");
 
   int code;
   String message;
@@ -51,13 +54,15 @@ class HttpRequest {
   String version;
   String userAgent;
   String host;
+  String body;
 
-  private HttpRequest(String method, String path, String version, String userAgent, String host) {
+  private HttpRequest(String method, String path, String version, String userAgent, String host, String body) {
     this.method = method;
     this.path = path;
     this.version = version;
     this.userAgent = userAgent;
     this.host = host;
+    this.body = body;
   }
 
   public static HttpRequest parseHttpRequest(BufferedReader reader) throws IOException {
@@ -71,6 +76,8 @@ class HttpRequest {
     String version = parts[2];
     String userAgent = "";
     String host = "";
+    int contentLength = 0;
+    String body = null;
 
     String headerLine;
     while ((headerLine = reader.readLine()) != null && !headerLine.isEmpty()) {
@@ -78,10 +85,20 @@ class HttpRequest {
         userAgent = headerLine.substring("User-Agent:".length()).trim();
       } else if (headerLine.toLowerCase().startsWith("host:")) {
         host = headerLine.substring("Host:".length()).trim();
+      } else if (headerLine.toLowerCase().startsWith("content-length:")) {
+        contentLength = Integer.parseInt(headerLine.substring("Content-Length:".length()).trim());
       }
     }
 
-    return new HttpRequest(method, path, version, userAgent, host);
+    if ("POST".equalsIgnoreCase(method) && contentLength > 0) {
+      char[] buffer = new char[contentLength];
+      int bytesRead = reader.read(buffer, 0, contentLength);
+      if (bytesRead > 0) {
+        body = new String(buffer, 0, bytesRead);
+      }
+    }
+
+    return new HttpRequest(method, path, version, userAgent, host, body);
   }
 }
 
@@ -106,6 +123,10 @@ class HttpResponse {
 
   public static HttpResponse createNotFoundResponse(ContentType contentType, String body) {
     return new HttpResponse(ResponseCode.NOT_FOUND, contentType, body);
+  }
+
+  public static HttpResponse createCreatedResponse(ContentType contentType, String body) {
+    return new HttpResponse(ResponseCode.CREATED, contentType, body);
   }
 
   public String getResponseString() {
@@ -146,16 +167,32 @@ public class Main {
           writer.println(response.getResponseString());
         } else if (request.path.startsWith("/files/")) {
           System.out.println("Processing files request");
-          String fileToFind = request.path.substring(request.path.lastIndexOf("/") + 1);
-          System.out.println("File to find: " + fileToFind);
-          if (filesInDir.contains(fileToFind)) {
-            String fileContent = Files.readString(Path.of(directory + "/" + fileToFind));
-
-            response = HttpResponse.createOkResponse(ContentType.OCTET, fileContent);
-            writer.println(response.getResponseString());
+          String requestFilename = request.path.substring(request.path.lastIndexOf("/") + 1);
+          System.out.println("File to use: " + requestFilename);
+          System.out.println("Method: " + request.method);
+          if (request.method.equals("POST")) {
+            System.out.println("POST request");
+            try (BufferedWriter fileWriter = new BufferedWriter(new FileWriter(directory + "/" + requestFilename))) {
+              fileWriter.write(request.body);
+              response = HttpResponse.createCreatedResponse(ContentType.TXT, "File Created");
+              writer.println(response.getResponseString());
+            } catch (IOException e) {
+              System.out.println("IOException while writing file: " + e.getMessage());
+              e.printStackTrace();
+              response = HttpResponse.createNotFoundResponse(ContentType.TXT, "File Not Found");
+              writer.println(response.getResponseString());
+            }
           } else {
-            response = HttpResponse.createNotFoundResponse(ContentType.OCTET, "File Not Found");
-            writer.println(response.getResponseString());
+
+            if (filesInDir.contains(requestFilename)) {
+              String fileContent = Files.readString(Path.of(directory + "/" + requestFilename));
+
+              response = HttpResponse.createOkResponse(ContentType.OCTET, fileContent);
+              writer.println(response.getResponseString());
+            } else {
+              response = HttpResponse.createNotFoundResponse(ContentType.OCTET, "File Not Found");
+              writer.println(response.getResponseString());
+            }
           }
         } else {
           response = HttpResponse.createNotFoundResponse(ContentType.TXT, "Invalid Request");
